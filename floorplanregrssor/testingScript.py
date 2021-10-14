@@ -66,20 +66,37 @@ def get_error(row):
     return class_sizes[row['classPred']]['min'] - row['sqrm']
 
 
-path = '/Users/asaflev/Downloads/floorplan/test'
-entries = os.listdir(path)
-entries = entries[:15]
-pool = ThreadPool(3)
-results_df = []
-results_df = pool.map(lambda x: get_prediction(f'{path}/{x}', model_id='ICN77983961711640576'), entries)
-results_df = pd.DataFrame(results_df)
-results_df.dropna(inplace=True)
-results_df['realClass'] = results_df['image_str'].apply(lambda x: get_real_class_from_image_str(x))
-results_df['sqrm'] = results_df['image_str'].apply(lambda x: get_sqf_from_image_str(x))
-results_df['error'] = results_df.apply(lambda row: get_error(row), axis=1)
-results_df['errorSQ'] = results_df['error'].pow(2)
+def get_results_df():
+    path = '/Users/asaflev/Downloads/floorplan/test'
+    model_id = 'ICN77983961711640576'
+    entries = os.listdir(path)
+    entries = entries[:30]
+    pool = ThreadPool(3)
+    results_df = pool.map(lambda x: get_prediction(f'{path}/{x}', model_id=model_id), entries)
+    results_df = pd.DataFrame(results_df)
+    results_df.dropna(inplace=True)
+    results_df['realClass'] = results_df['image_str'].apply(lambda x: get_real_class_from_image_str(x))
+    results_df['sqrm'] = results_df['image_str'].apply(lambda x: get_sqf_from_image_str(x))
+    results_df['error'] = results_df.apply(lambda row: get_error(row), axis=1)
+    results_df['errorSQ'] = results_df['error'].pow(2)
+    results_df.to_csv(f'results_{model_id}.csv')
+    return results_df
 
-print(f'MAE: {results_df["error"].mean()}')
-print(f'MSE: {results_df["errorSQ"].mean()}')
-print(f'RMSE: {(results_df["errorSQ"].mean())**0.5}')
 
+def get_metrics_by_score(score, results_df):
+    results_df_temp = results_df[results_df['score'] >= score]
+    return {'score': score, 'MAE': round(results_df_temp["error"].mean()), 'MSE': round(results_df_temp["errorSQ"].mean()),
+            'RMSE': round((results_df_temp["errorSQ"].mean()) ** 0.5), 'AmountOfPreds': len(results_df_temp.index)}
+
+
+def main_func():
+    result_df = get_results_df()
+    scores_df = []
+    for score in [0.5, 0.6, 0.7, 0.8, 0.9]:
+        scores_df.append(get_metrics_by_score(score, result_df))
+    scores_df = pd.DataFrame(scores_df)
+    scores_df['totalImages'] = len(result_df.index)
+    return scores_df
+
+
+scores_df = main_func()
