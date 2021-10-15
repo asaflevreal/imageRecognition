@@ -66,12 +66,20 @@ def get_error(row):
     return class_sizes[row['classPred']]['min'] - row['sqrm']
 
 
+def get_num_of_rooms(string_input):
+    num_of_room_index_found = string_input.find('_')
+    num_of_room = string_input[num_of_room_index_found + 1: num_of_room_index_found + 2]
+    return num_of_room
+
+
 def get_results_df():
     path = '/Users/asaflev/Downloads/floorplan/test'
     model_id = 'ICN77983961711640576'
     entries = os.listdir(path)
-    entries = entries[:30]
-    pool = ThreadPool(3)
+    entries = entries[:10000]
+    entries = list(filter(lambda x: get_num_of_rooms(x) == '1', entries))
+    entries = entries[:1000]
+    pool = ThreadPool(2)
     results_df = pool.map(lambda x: get_prediction(f'{path}/{x}', model_id=model_id), entries)
     results_df = pd.DataFrame(results_df)
     results_df.dropna(inplace=True)
@@ -85,7 +93,8 @@ def get_results_df():
 
 def get_metrics_by_score(score, results_df):
     results_df_temp = results_df[results_df['score'] >= score]
-    return {'score': score, 'MAE': round(results_df_temp["error"].mean()), 'MSE': round(results_df_temp["errorSQ"].mean()),
+    return {'score': score, 'MAE': round(results_df_temp["error"].mean()),
+            'MSE': round(results_df_temp["errorSQ"].mean()),
             'RMSE': round((results_df_temp["errorSQ"].mean()) ** 0.5), 'AmountOfPreds': len(results_df_temp.index)}
 
 
