@@ -1,15 +1,22 @@
-import os
-from multiprocessing.pool import ThreadPool
-
+import matplotlib.pyplot as plt
 import pandas as pd
+import seaborn as sns
 from google.cloud import automl_v1beta1
-
 # 'content' is base-64-encoded image data.
-class_sizes = {'0': {'min': 0, 'max': 650}, '1': {'min': 651, 'max': 850}, '2': {'min': 851, 'max': 1200},
-               '3': {'min': 1201, 'max': 1700}, '4': {'min': 1701, 'max': 2200}, '5': {'min': 2201, 'max': 2700},
-               '6': {'min': 2701, 'max': 3500}, '7': {'min': 3501, 'max': 4500}, '8': {'min': 4501, 'max': 5500},
-               '9': {'min': 5501, 'max': 1000000}
-               }
+from sklearn.metrics import confusion_matrix, accuracy_score
+
+class_sizes = {
+    '0': {'min': 0, 'actualMean': 500, 'max': 600},
+    '1': {'min': 601, 'actualMean': 672, 'max': 750},
+    '2': {'min': 751, 'actualMean': 806, 'max': 900},
+    '3': {'min': 901, 'actualMean': 966, 'max': 1100},
+    '4': {'min': 1101, 'actualMean': 1175, 'max': 1300},
+    '5': {'min': 1301, 'actualMean': 1387, 'max': 1500},
+    '6': {'min': 1501, 'actualMean': 2469, 'max': 35000},
+}
+model_id_names = {'ICN8969778476001263616': 'reg', 'ICN2123603354956333056': 'csv'}
+
+scores_df1 = pd.read_csv(f'./final_scores_reg.csv')
 
 
 def get_prediction(file_path, model_id):
@@ -20,7 +27,7 @@ def get_prediction(file_path, model_id):
 
     name = 'projects/{}/locations/us-central1/models/{}'.format(project_id, model_id)
     payload = {'image': {'image_bytes': content}}
-    params = {}
+    params = {'score_threshold': '0.5'}
     response = prediction_client.predict(name=name, payload=payload, params=params)
     res = {}
     for annotation_payload in response.payload:
@@ -54,16 +61,36 @@ def find_nth(string_input, subset, n):
 
 
 def get_sqf_from_image_str(string_input):
-    sqf = find_nth(string_input, '_', 3)
-    return sqf
+    try:
+        sqf = find_nth(string_input, '_', 3)
+        return sqf
+    except:
+        return None
 
 
-def get_error(row):
-    if row['realClass'] == row['classPred']:
-        return 0
-    if row['realClass'] > row['classPred']:
-        return row['sqrm'] - class_sizes[row['classPred']]['max']
-    return class_sizes[row['classPred']]['min'] - row['sqrm']
+def get_class_from_sqft(sqft):
+    if type(sqft) != int:
+        return None
+    if sqft < 600:
+        return '0'
+    if sqft < 750:
+        return '1'
+    if sqft < 900:
+        return '2'
+    if sqft < 1100:
+        return '3'
+    if sqft < 1300:
+        return '4'
+    if sqft < 1500:
+        return '5'
+    else:
+        return '6'
+
+
+def get_error_from_middle_range(row):
+    row_sqf = row['sqft']
+    class_actual_mean = class_sizes[str(row['classPred'])]['actualMean']
+    return abs(row_sqf - class_actual_mean)
 
 
 def get_num_of_rooms(string_input):
@@ -72,22 +99,22 @@ def get_num_of_rooms(string_input):
     return num_of_room
 
 
-def get_results_df():
+def get_results_df(model_id):
     path = '/Users/asaflev/Downloads/floorplan/test'
-    model_id = 'ICN77983961711640576'
     entries = os.listdir(path)
     entries = entries[:10000]
-    entries = list(filter(lambda x: get_num_of_rooms(x) == '1', entries))
+    entries = list(filter(lambda x: get_num_of_rooms(x) in ['0', '1'], entries))
     entries = entries[:1000]
-    pool = ThreadPool(2)
+    pool = ThreadPool(3)
     results_df = pool.map(lambda x: get_prediction(f'{path}/{x}', model_id=model_id), entries)
     results_df = pd.DataFrame(results_df)
     results_df.dropna(inplace=True)
-    results_df['realClass'] = results_df['image_str'].apply(lambda x: get_real_class_from_image_str(x))
-    results_df['sqrm'] = results_df['image_str'].apply(lambda x: get_sqf_from_image_str(x))
-    results_df['error'] = results_df.apply(lambda row: get_error(row), axis=1)
+    results_df['sqft'] = results_df['image_str'].apply(lambda x: get_sqf_from_image_str(x))
+    results_df['realClass'] = results_df['sqft'].apply(lambda x: get_class_from_sqft(x))
+    results_df['error'] = results_df.apply(lambda row: get_error_from_middle_range(row), axis=1)
     results_df['errorSQ'] = results_df['error'].pow(2)
-    results_df.to_csv(f'results_{model_id}.csv')
+    results_df['errorPercentage'] = 100 * (results_df['error'] / results_df['sqft'])
+    results_df.to_csv(f'results_{model_id_names[model_id]}.csv')
     return results_df
 
 
@@ -95,17 +122,41 @@ def get_metrics_by_score(score, results_df):
     results_df_temp = results_df[results_df['score'] >= score]
     return {'score': score, 'MAE': round(results_df_temp["error"].mean()),
             'MSE': round(results_df_temp["errorSQ"].mean()),
-            'RMSE': round((results_df_temp["errorSQ"].mean()) ** 0.5), 'AmountOfPreds': len(results_df_temp.index)}
+            'RMSE': round((results_df_temp["errorSQ"].mean()) ** 0.5),
+            'MAPE': round((results_df_temp["errorPercentage"].mean())),
+            'AmountOfPreds': len(results_df_temp.index)}
 
 
-def main_func():
-    result_df = get_results_df()
+def get_reports_and_con_matrix(predictions, truth: pd.DataFrame):
+    pred_labels = [0, 1, 2, 3, 4, 5, 6]
+
+    cm = confusion_matrix(truth, predictions, labels=pred_labels, normalize='all')
+    cm = pd.DataFrame(cm)
+    matrix_norm = cm.apply(lambda row: round(row / row.sum(), 2) * 100, axis=1)
+    print(f'ACC: {accuracy_score(truth, predictions)}')
+    ax = plt.subplot()
+    sns.heatmap(matrix_norm, annot=True, ax=ax, fmt='g')
+    ax.set_xticklabels(pred_labels)
+    ax.set_yticklabels(pred_labels)
+
+    ax.set_xlabel('Predicted labels')
+    ax.set_ylabel('True labels')
+
+    plt.show()
+
+
+def main_func(model_id):
+    result_df = get_results_df(model_id)
+    result_df['errorPercentage'] = result_df['errorPercentage'] * 100
+    # get_reports_and_con_matrix(result_df['classPred'], result_df['realClass'])
     scores_df = []
     for score in [0.5, 0.6, 0.7, 0.8, 0.9]:
         scores_df.append(get_metrics_by_score(score, result_df))
     scores_df = pd.DataFrame(scores_df)
     scores_df['totalImages'] = len(result_df.index)
+    scores_df.to_csv(f'./final_scores_{model_id_names[model_id]}.csv')
     return scores_df
 
 
-scores_df = main_func()
+scores_df_1 = main_func('ICN2123603354956333056')
+# scores_df_2 = main_func('ICN8969778476001263616')
