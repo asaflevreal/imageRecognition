@@ -1,3 +1,6 @@
+import os
+from multiprocessing.pool import ThreadPool
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
@@ -159,4 +162,4 @@ def main_func(model_id):
 
 
 scores_df_1 = main_func('ICN2123603354956333056')
-# scores_df_2 = main_func('ICN8969778476001263616')
+scores_df_2 = main_func('ICN8969778476001263616')
