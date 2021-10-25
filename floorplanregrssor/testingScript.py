@@ -22,6 +22,17 @@ model_id_names = {'ICN8969778476001263616': 'reg', 'ICN2123603354956333056': 'cs
 scores_df1 = pd.read_csv(f'./final_scores_reg.csv')
 
 
+def find_max_score_class(response_payload):
+    max_score = 0
+    display_name = ''
+    for p in response_payload:
+        if p.classification.score > max_score:
+            max_score = p.classification.score
+            display_name = p.display_name
+    res = {'max_score': max_score, 'display_name': display_name}
+    return res
+
+
 def get_prediction(file_path, model_id):
     project_id = "25296097780"
     with open(file_path, 'rb') as ff:
@@ -30,20 +41,14 @@ def get_prediction(file_path, model_id):
 
     name = 'projects/{}/locations/us-central1/models/{}'.format(project_id, model_id)
     payload = {'image': {'image_bytes': content}}
-    params = {'score_threshold': '0.5'}
+    params = {'score_threshold': '0.0'}
     response = prediction_client.predict(name=name, payload=payload, params=params)
     res = {}
-    for annotation_payload in response.payload:
-        print(
-            u"Predicted class name: {}".format(annotation_payload.display_name)
-        )
-        print(
-            u"Predicted class score: {}".format(
-                annotation_payload.classification.score
-            )
-        )
-        res.update({'image_str': file_path, 'classPred': annotation_payload.display_name,
-                    'score': annotation_payload.classification.score})
+    best_class_found = find_max_score_class(response.payload)
+    res.update({'image_str': file_path, 'classPred': best_class_found['display_name'],
+                'score': best_class_found['max_score']})
+    print(f'Class predicted: {best_class_found["display_name"]}\n'
+          f'Score: {best_class_found["max_score"]}')
     return res
 
 
@@ -107,10 +112,11 @@ def get_results_df(model_id):
     entries = os.listdir(path)
     entries = entries[:10000]
     entries = list(filter(lambda x: get_num_of_rooms(x) in ['0', '1'], entries))
-    entries = entries[:1000]
+    entries = entries[:100]
     pool = ThreadPool(3)
     results_df = pool.map(lambda x: get_prediction(f'{path}/{x}', model_id=model_id), entries)
     results_df = pd.DataFrame(results_df)
+    print(f'Total Number  of predicted: {len(results_df.index)}')
     results_df.dropna(inplace=True)
     results_df['sqft'] = results_df['image_str'].apply(lambda x: get_sqf_from_image_str(x))
     results_df['realClass'] = results_df['sqft'].apply(lambda x: get_class_from_sqft(x))
